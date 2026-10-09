@@ -31,6 +31,8 @@
 
 @implementation AccessibilityCheck
 
+static CGEventRef testTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *userInfo) { return event; }
+
 /// Load
 
 + (void)load {
@@ -278,8 +280,24 @@
     ///     But it seems making the helper show up in System Settings only works the first time calling this func after the helper has been launched.
     Boolean isTrusted = AXIsProcessTrustedWithOptions(options);
     
-    /// Release & return
+    /// Release
     CFRelease(options);
+    
+    /// Double check by creating an eventTap
+    ///     After rebuilding with a different code signature (e.g. ad-hoc signed dev builds), `AXIsProcessTrusted` can keep returning true based on the stale System Settings entry, while `CGEventTapCreate()` returns NULL.
+    ///     The Helper would then crash when it tries to enable its taps, and launchd would relaunch it in a loop.
+    ///     If we report 'not trusted' in that case, the caller resets the stale entry through tccutil and the user can grant access again.
+    if (isTrusted) {
+        CFMachPortRef testTap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionListenOnly, CGEventMaskBit(kCGEventFlagsChanged), testTapCallback, NULL);
+        if (testTap == NULL) {
+            NSLog(@"Accessibility Check - AXIsProcessTrusted is true but creating an eventTap failed. Treating as not trusted.");
+            return false;
+        }
+        CFMachPortInvalidate(testTap);
+        CFRelease(testTap);
+    }
+    
+    /// Return
     return isTrusted;
 }
 
